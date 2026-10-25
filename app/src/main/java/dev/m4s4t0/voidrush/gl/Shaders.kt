@@ -1,0 +1,499 @@
+package dev.m4s4t0.voidrush.gl
+
+object Shaders {
+    /** Ships, enemies, rocks: flat-shaded facets with a material per vertex and the paint job's finish and decal. */
+    const val LIT_VS = """
+uniform mat4 uMvp;
+uniform mat4 uModel;
+attribute vec3 aPos;
+attribute vec3 aNor;
+attribute float aMat;
+varying vec3 vN;
+varying vec3 vObj;
+varying vec3 vW;
+varying float vMat;
+void main() {
+    vN = (uModel * vec4(aNor, 0.0)).xyz;
+    vObj = aPos;
+    vMat = aMat;
+    vW = (uModel * vec4(aPos, 1.0)).xyz;
+    gl_Position = uMvp * vec4(aPos, 1.0);
+}
+"""
+
+    const val LIT_FS = """
+precision mediump float;
+uniform vec3 uC0;
+uniform vec3 uC1;
+uniform vec3 uC2;
+uniform float uFinish;
+uniform float uDecal;
+uniform float uTime;
+uniform float uFlash;
+uniform vec3 uEye;
+varying vec3 vN;
+varying vec3 vObj;
+varying vec3 vW;
+varying float vMat;
+
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+vec3 hue(float h) { return clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0); }
+
+void main() {
+    vec3 n = normalize(vN);
+    vec3 V = normalize(uEye - vW);
+    vec3 L = normalize(vec3(-0.45, 0.55, 0.8));
+    float m = floor(vMat + 0.5);
+    vec3 base;
+    float specAmt = 0.35;
+    float shin = 24.0;
+    vec2 p = vObj.xy;
+    if (m < 0.5) {
+        base = uC0;
+        float d = 0.0;
+        float di = floor(uDecal + 0.5);
+        if (di == 1.0) d = step(abs(p.y), 0.09);
+        else if (di == 2.0) d = step(fract((p.x + abs(p.y) * 1.3) * 2.2), 0.3) * step(abs(p.y), 0.75);
+        else if (di == 3.0) d = step(0.0, p.y);
+        else if (di == 4.0) d = mod(floor(p.x * 5.0) + floor(p.y * 5.0), 2.0);
+        else if (di == 5.0) d = step(0.55, sin(p.x * 11.0 + sin(p.y * 9.0) * 1.6 + abs(p.y) * 6.0));
+        else if (di == 6.0) {
+            vec2 g = fract(p * 6.0);
+            d = max(step(g.x, 0.08), step(g.y, 0.08)) * step(hash(floor(p * 6.0)), 0.55);
+        } else if (di == 7.0) {
+            // Hex: honeycomb edges.
+            vec2 q = p * 5.0; q.x += mod(floor(q.y), 2.0) * 0.5;
+            vec2 g = abs(fract(q) - 0.5);
+            d = step(0.4, max(g.x * 1.1 + g.y * 0.6, g.y));
+        } else if (di == 8.0) d = step(0.6, sin(p.y * 14.0 + sin(p.x * 6.0) * 2.0));
+        else if (di == 9.0) d = step(length(fract(p * 6.0) - 0.5), 0.22);
+        else if (di == 10.0) d = step(abs(p.y - sign(sin(p.x * 7.0)) * 0.12 * fract(p.x * 2.2)), 0.07);
+        else if (di == 11.0) {
+            vec2 q = p * vec2(7.0, 9.0); q.x += mod(floor(q.y), 2.0) * 0.5;
+            d = step(0.42, length(fract(q) - vec2(0.5, 0.0)));
+        } else if (di == 12.0) d = step(0.0, sin(p.y * 9.0 + p.x * 4.0 + uTime * 2.0) * 0.4 - p.x * 0.9 - 0.2);
+        else if (di == 13.0) d = step(0.9, hash(floor(p * 9.0))) * step(length(fract(p * 9.0) - 0.5), 0.3);
+        else if (di >= 14.0) {
+            vec2 g = fract(p * 4.0) - 0.5;
+            d = step(abs(abs(g.x) + abs(g.y) - 0.3), 0.05) * step(0.4, hash(floor(p * 4.0)));
+        }
+        base = mix(base, uC1, d);
+    } else if (m < 1.5) {
+        base = uC1;
+    } else if (m < 2.5) {
+        // Glow: lit from within, ignores the light.
+        vec3 g = uC2 * (1.15 + 0.15 * sin(uTime * 9.0 + p.x * 4.0));
+        gl_FragColor = vec4(mix(g + vec3(0.15), vec3(1.0), uFlash), 1.0);
+        return;
+    } else if (m < 3.5) {
+        base = vec3(0.13, 0.14, 0.18) + uC0 * 0.12;
+        specAmt = 0.5; shin = 40.0;
+    } else {
+        base = vec3(0.03, 0.05, 0.09);
+        specAmt = 1.2; shin = 60.0;
+    }
+    float f = uFinish;
+    if (m < 1.5) {
+        if (f < 0.5) { specAmt = 0.04; shin = 6.0; }
+        else if (f < 1.5) { specAmt = 0.55; shin = 32.0; }
+        else if (f < 2.5) { specAmt = 0.8; shin = 14.0; base *= 0.9 + 0.2 * sin(p.x * 60.0 + p.y * 7.0) * 0.5; }
+        else if (f < 3.5) {
+            // Chrome: a fake reflection of a sky gradient.
+            vec3 r = reflect(-V, n);
+            vec3 env = mix(vec3(0.05, 0.04, 0.1), vec3(0.9, 0.92, 1.0), smoothstep(-0.2, 0.9, r.y)) + uC2 * 0.25 * smoothstep(0.3, 1.0, r.x);
+            base = mix(base, env, 0.65);
+            specAmt = 1.2; shin = 80.0;
+        } else if (f < 4.5) {
+            base = mix(base, hue(dot(n, vec3(0.6, 0.3, 0.7)) * 1.4 + uTime * 0.08 + p.x * 0.5), 0.6);
+            specAmt = 0.9; shin = 40.0;
+        } else if (f < 5.5) {
+            // Void: dark paint with stars drifting underneath.
+            base *= 0.25;
+            vec2 sp = p * 14.0 + vec2(uTime * 0.6, 0.0);
+            float s = step(0.93, hash(floor(sp)));
+            float tw = 0.5 + 0.5 * sin(uTime * 3.0 + hash(floor(sp)) * 40.0);
+            base += vec3(0.85, 0.8, 1.0) * s * tw * smoothstep(0.4, 0.1, length(fract(sp) - 0.5));
+            specAmt = 0.7; shin = 50.0;
+        } else if (f < 6.5) {
+            // Pearl: soft sheen shifting with view angle.
+            base = mix(base, base + hue(dot(n, V) * 0.6 + 0.55) * 0.35, 0.7);
+            specAmt = 0.7; shin = 20.0;
+        } else if (f < 7.5) {
+            // Carbon: woven dark fibre.
+            vec2 w = fract(p * 18.0);
+            float weave = mod(floor(p.x * 18.0) + floor(p.y * 18.0), 2.0) > 0.5 ? w.x : w.y;
+            base = base * 0.35 + vec3(0.08) * weave;
+            specAmt = 0.6; shin = 30.0;
+        } else if (f < 8.5) {
+            // Neon: glowing edge lines over dark paint.
+            base = base * 0.3 + uC2 * step(0.85, fract(p.x * 4.0 + p.y * 2.0)) * (0.9 + 0.3 * sin(uTime * 6.0));
+            specAmt = 0.4; shin = 20.0;
+        } else if (f < 9.5) {
+            // Magma: cooling crust with glowing cracks.
+            float c = abs(sin(p.x * 9.0 + sin(p.y * 7.0 + uTime) * 1.5) * sin(p.y * 8.0 - p.x * 3.0));
+            base = mix(base * 0.3, vec3(1.0, 0.45, 0.1) * (1.2 + 0.3 * sin(uTime * 4.0)), step(c, 0.12));
+            specAmt = 0.2; shin = 10.0;
+        } else if (f < 10.5) {
+            // Frost: icy, pale, crystalline.
+            base = mix(base, vec3(0.8, 0.92, 1.0), 0.45 + 0.25 * step(0.8, hash(floor(p * 20.0))));
+            specAmt = 1.0; shin = 70.0;
+        } else {
+            // Prism: bands of rainbow sliding across.
+            base = mix(base, hue(p.x * 0.8 + p.y * 0.4 - uTime * 0.25), 0.75);
+            specAmt = 1.1; shin = 60.0;
+        }
+    }
+    float diff = max(dot(n, L), 0.0);
+    vec3 col = base * (0.3 + 0.85 * diff);
+    col += vec3(1.0) * specAmt * pow(max(dot(reflect(-L, n), V), 0.0), shin);
+    float fres = pow(1.0 - max(dot(n, V), 0.0), 3.0);
+    col += uC2 * fres * (m > 3.5 ? 0.9 : 0.45);
+    if (f > 4.5 && f < 5.5 && m < 1.5) col += vec3(0.5, 0.2, 1.0) * fres * 0.6;
+    gl_FragColor = vec4(mix(col, vec3(1.0), uFlash), 1.0);
+}
+"""
+
+    /** Every sprite: glows, bullets, sparks, beams. See Shape for the numbers. */
+    const val SPRITE_VS = """
+uniform mat4 uVp;
+uniform float uZ;
+attribute vec2 aPos;
+attribute vec2 aUv;
+attribute vec4 aCol;
+attribute float aShape;
+varying vec2 vUv;
+varying vec4 vCol;
+varying float vShape;
+void main() {
+    vUv = aUv;
+    vCol = aCol;
+    vShape = aShape;
+    gl_Position = uVp * vec4(aPos, uZ, 1.0);
+}
+"""
+
+    const val SPRITE_FS = """
+precision mediump float;
+varying vec2 vUv;
+varying vec4 vCol;
+varying float vShape;
+void main() {
+    vec2 uv = vUv;
+    float d = length(uv);
+    vec3 c = vCol.rgb;
+    float s = vShape;
+    vec4 o;
+    if (s < 0.5) {
+        // Orb: white-hot core, coloured glow.
+        float core = smoothstep(0.5, 0.15, d);
+        float glow = exp(-d * d * 4.0) * (1.0 - smoothstep(0.75, 1.0, d));
+        o = vec4(mix(c, vec3(1.0), core * 0.85) * (core + glow * 0.9), 0.0);
+    } else if (s < 1.5) {
+        float g = smoothstep(0.18, 0.0, abs(d - 0.78)) * (1.0 - smoothstep(0.97, 1.0, d));
+        o = vec4(c * g * 1.2, 0.0);
+    } else if (s < 2.5) {
+        float g = 1.0 - smoothstep(0.0, 1.0, d);
+        o = vec4((c + vec3(g * 0.6)) * g * g * 1.4, 0.0);
+    } else if (s < 3.5) {
+        float g = exp(-d * d * 4.0) * (1.0 - smoothstep(0.7, 1.0, d));
+        o = vec4(c * g, 0.0);
+    } else if (s < 4.5) {
+        float dd = abs(uv.x) + abs(uv.y);
+        float g = smoothstep(1.0, 0.75, dd);
+        o = vec4(c * g * (0.6 + 0.4 * uv.y), g * 0.7);
+    } else if (s < 5.5) {
+        // Beam: a soft band with a white core, fading at its ends.
+        float a = abs(uv.y);
+        float ends = 1.0 - smoothstep(0.85, 1.0, abs(uv.x));
+        float g = exp(-a * a * 5.0) * ends;
+        float core = smoothstep(0.32, 0.0, a) * ends;
+        o = vec4(c * g * 1.2 + vec3(core), 0.0);
+    } else if (s < 6.5) {
+        float star = max(0.0, 1.0 - abs(uv.x * uv.y) * 30.0) * (1.0 - smoothstep(0.0, 1.0, d));
+        float g = exp(-d * d * 9.0);
+        o = vec4((c + vec3(0.3)) * (star + g), 0.0);
+    } else if (s < 7.5) {
+        float g = smoothstep(0.12, 0.0, abs(d - 0.86)) * (1.0 - smoothstep(0.98, 1.0, d));
+        o = vec4(c * g, 0.0);
+    } else if (s < 8.5) {
+        // Enemy bullet: readable on anything — a dark edge, a coloured body, a white heart, and a halo.
+        float body = smoothstep(0.66, 0.58, d);
+        float edge = smoothstep(0.45, 0.58, d) * body;
+        float core = smoothstep(0.34, 0.18, d);
+        vec3 col = mix(mix(c, vec3(1.0), core), c * 0.25, edge);
+        float halo = exp(-d * d * 3.0) * (1.0 - body) * (1.0 - smoothstep(0.85, 1.0, d));
+        o = vec4(col * body + c * halo * 0.7, body);
+    } else if (s < 9.5) {
+        // Credit: a hexagonal coin.
+        vec2 q = abs(uv);
+        float hd = max(q.x * 0.866 + q.y * 0.5, q.y);
+        float body = smoothstep(0.62, 0.55, hd);
+        float shine = smoothstep(0.2, 0.0, abs(uv.x + uv.y * 0.6 - 0.1));
+        float glow = exp(-d * d * 3.0) * (1.0 - body) * (1.0 - smoothstep(0.85, 1.0, d));
+        o = vec4(c * body * (0.75 + 0.35 * uv.y) + vec3(shine * body * 0.6) + c * glow * 0.6, body);
+    } else if (s < 10.5) {
+        // A hole: darkens what's behind (the singularity).
+        float g = smoothstep(1.0, 0.35, d);
+        o = vec4(c * smoothstep(0.75, 0.95, d) * g * 0.8, g);
+    } else {
+        o = vec4(c, 0.0);
+    }
+    gl_FragColor = o * vCol.a;
+}
+"""
+
+    /** The backdrop: drifting nebula, three layers of stars and a planet, all procedural. */
+    const val SKY_VS = """
+attribute vec2 aPos;
+varying vec2 vUv;
+void main() {
+    vUv = aPos * 0.5 + 0.5;
+    gl_Position = vec4(aPos, 0.999, 1.0);
+}
+"""
+
+    const val SKY_FS = """
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform vec2 uRes;
+uniform float uTime;
+uniform float uScroll;
+uniform float uScrollY;
+uniform vec3 uNebA;
+uniform vec3 uNebB;
+uniform vec3 uPlanetCol;
+uniform vec3 uPlanet;
+uniform float uOct;
+uniform float uFlash;
+uniform vec3 uFlashCol;
+uniform float uDim;
+varying vec2 vUv;
+
+float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x), mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float fbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.55;
+    for (int i = 0; i < 4; i++) {
+        if (float(i) >= uOct) break;
+        v += a * noise(p);
+        p = p * 2.03 + vec2(1.7, 9.2);
+        a *= 0.5;
+    }
+    return v;
+}
+
+void main() {
+    vec2 p = (vUv - 0.5) * vec2(uRes.x / uRes.y, 1.0) * 2.0;
+    vec3 col = vec3(0.012, 0.01, 0.025);
+    vec2 q = p * 1.1 + vec2(uScroll, uScrollY) * 0.012;
+    float n1 = fbm(q * 1.2 + vec2(0.0, uTime * 0.01));
+    float n2 = fbm(q * 2.2 - vec2(uTime * 0.007, 3.1));
+    float norm = uOct < 1.5 ? 1.8 : (uOct < 2.5 ? 1.25 : 1.05);
+    n1 *= norm; n2 *= norm;
+    col += uNebA * smoothstep(0.38, 1.0, n1 + 0.25 * n2) * 0.6;
+    col += uNebB * smoothstep(0.5, 1.05, n2 + 0.2 * n1) * 0.45;
+    for (int l = 0; l < 3; l++) {
+        float fl = float(l);
+        float scale = 9.0 + fl * 7.0;
+        vec2 sp = p * scale + vec2(uScroll, uScrollY) * (0.05 + fl * 0.07) * scale * 0.1 + vec2(0.0, fl * 13.0);
+        vec2 id = floor(sp);
+        vec2 f = fract(sp) - 0.5;
+        float h = h21(id + fl * 7.1);
+        if (h > 0.82) {
+            vec2 off = vec2(h21(id + 3.3), h21(id + 5.7)) - 0.5;
+            float dd = length(f - off * 0.7);
+            float b = (h - 0.82) / 0.18;
+            float tw = 0.7 + 0.3 * sin(uTime * (2.0 + h * 5.0) + h * 40.0);
+            vec3 sc = mix(vec3(0.75, 0.8, 1.0), vec3(1.0, 0.85, 0.75), h21(id + 9.1));
+            col += sc * smoothstep(0.05 + 0.05 * b, 0.0, dd) * b * tw * (0.6 + fl * 0.3);
+        }
+    }
+    vec2 pc = p - uPlanet.xy;
+    float r = length(pc) / uPlanet.z;
+    if (r < 1.35) {
+        vec3 ld = normalize(vec3(-0.6, 0.5, 0.55));
+        if (r < 1.0) {
+            vec3 nn = vec3(pc / uPlanet.z, sqrt(1.0 - r * r));
+            float l = max(dot(nn, ld), 0.0);
+            float bands = noise(vec2(nn.y * 7.0 + noise(nn.xy * 3.0 + uTime * 0.01) * 1.6, 0.5));
+            vec3 pcol = uPlanetCol * (0.5 + 0.5 * bands);
+            vec3 lit = pcol * (0.04 + l * 1.05) + uPlanetCol * pow(1.0 - nn.z, 3.0) * 0.6 * (0.3 + l);
+            col = mix(col, lit, smoothstep(1.0, 0.985, r));
+        }
+        float halo = pow(max(0.0, 1.0 - abs(r - 1.0) * 4.0), 2.0);
+        float side = max(0.0, dot(normalize(vec3(pc, 0.0)), ld)) * 0.8 + 0.2;
+        col += uPlanetCol * halo * 0.45 * side;
+    }
+    vec2 v = vUv - 0.5;
+    col *= 1.0 - dot(v, v) * 0.9;
+    col *= uDim;
+    col = mix(col, uFlashCol, uFlash * 0.3);
+    gl_FragColor = vec4(col, 1.0);
+}
+"""
+
+    /**
+     * The foundry corridor, in screen units (height 2): windows onto space on the far wall, girders, trusses, pipes
+     * and lamps on the middle layer, and the deck and ceiling plating at [uFloor] and [uCeil], each layer scrolled by
+     * its own share of [uScroll] (distance run, in the same units).
+     */
+    const val FOUNDRY_FS = """
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform vec2 uRes;
+uniform float uTime;
+uniform float uScroll;
+uniform vec3 uA;
+uniform vec3 uB;
+uniform float uFloor;
+uniform float uCeil;
+uniform float uOct;
+uniform float uFlash;
+uniform vec3 uFlashCol;
+uniform float uDim;
+varying vec2 vUv;
+
+float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x), mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float fbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.55;
+    for (int i = 0; i < 4; i++) {
+        if (float(i) >= uOct) break;
+        v += a * noise(p);
+        p = p * 2.03 + vec2(1.7, 9.2);
+        a *= 0.5;
+    }
+    return v;
+}
+float sbox(vec2 p, vec2 b) { vec2 d = abs(p) - b; return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0); }
+
+/** A horizontal pipe of radius r at height y: returns the cover, writes the shaded colour. */
+float pipe(vec2 p, float y, float r, float sx, vec3 tint, inout vec3 col) {
+    float d = (p.y - y) / r;
+    if (abs(d) >= 1.0) return 0.0;
+    float sh = sqrt(1.0 - d * d);
+    vec3 c = tint * (0.25 + 0.75 * sh) * (0.7 + 0.3 * smoothstep(0.2, -0.6, d));
+    float fl = abs(fract(sx * 0.8) - 0.5);
+    c *= 1.0 + smoothstep(0.03, 0.0, abs(fl - 0.47)) * 0.8;
+    c += vec3(1.0) * pow(sh, 18.0) * 0.08 * step(0.0, d);
+    col = c;
+    return 1.0;
+}
+
+void main() {
+    float asp = uRes.x / uRes.y;
+    vec2 p = (vUv - 0.5) * vec2(asp, 1.0) * 2.0;
+
+    // the far wall, its panels and windows onto open space
+    float fx = p.x + uScroll * 0.15;
+    vec2 pp = vec2(fx, p.y) * 4.0;
+    vec2 pg = abs(fract(pp) - 0.5);
+    vec3 col = vec3(0.024, 0.022, 0.04) + vec3(0.018, 0.018, 0.03) * h21(floor(pp));
+    col *= 1.0 - smoothstep(0.46, 0.5, max(pg.x, pg.y)) * 0.6;
+    col += uB * 0.03 * smoothstep(0.9, -0.9, p.y);
+    float cell = 3.4;
+    float wx = mod(fx, cell) - cell * 0.5;
+    float win = sbox(vec2(wx, p.y - 0.08), vec2(1.15, 0.4)) - 0.08;
+    if (win < 0.02) {
+        vec2 sp = p + vec2(uScroll * 0.03, 0.0);
+        vec3 sky = vec3(0.008, 0.006, 0.02);
+        float n = fbm(sp * 1.4 + vec2(0.0, uTime * 0.01)) * (uOct < 1.5 ? 1.8 : (uOct < 2.5 ? 1.25 : 1.05));
+        sky += uB * smoothstep(0.38, 1.0, n) * 0.55 + uA * smoothstep(0.6, 1.1, n) * 0.25;
+        for (int l = 0; l < 2; l++) {
+            float fl = float(l);
+            vec2 sg = (sp + vec2(uScroll * 0.02 * fl, fl * 3.0)) * (20.0 + fl * 14.0);
+            vec2 id = floor(sg);
+            float h = h21(id + fl * 5.3);
+            if (h > 0.84) {
+                float tw = 0.7 + 0.3 * sin(uTime * (2.0 + h * 5.0) + h * 40.0);
+                sky += vec3(0.85, 0.88, 1.0) * smoothstep(0.1, 0.0, length(fract(sg) - 0.5)) * (h - 0.84) / 0.16 * tw * 1.4;
+            }
+        }
+        col = mix(col, sky, smoothstep(0.02, -0.01, win));
+    }
+    col += uA * smoothstep(0.035, 0.0, abs(win - 0.01)) * 0.22;
+
+    // the middle layer: girders with lamps, trusses along the top and bottom, pipes
+    float mx = p.x + uScroll * 0.45;
+    float gc = 2.6;
+    float gx = mod(mx, gc) - gc * 0.5;
+    float gid = floor(mx / gc);
+    float gw = 0.085;
+    if (abs(gx) < gw) {
+        float side = gx / gw;
+        vec3 g = vec3(0.05, 0.05, 0.075) * (0.75 + 0.35 * side);
+        g *= 1.0 - smoothstep(0.75, 0.95, abs(side)) * 0.5;
+        float rivet = smoothstep(0.25, 0.1, length(vec2(side * 0.5, fract(p.y * 9.0) - 0.5)));
+        g += vec3(0.04) * rivet;
+        g += uA * smoothstep(0.6, 1.0, side) * 0.06;
+        col = g;
+    }
+    float on = step(0.35, fract(uTime * 0.45 + h21(vec2(gid, 1.7))));
+    float lamp = length(vec2(gx, p.y - 0.32));
+    vec3 lampCol = mix(uA, vec3(1.0, 0.75, 0.35), step(0.75, h21(vec2(gid, 4.1))));
+    col += lampCol * (smoothstep(0.03, 0.0, lamp) * 1.4 + exp(-lamp * 9.0) * 0.18) * on;
+    for (int k = 0; k < 2; k++) {
+        float y0 = k == 0 ? 0.66 : -0.6;
+        float yb = (p.y - y0) / 0.07;
+        if (abs(yb) < 1.15) {
+            float zig = abs(fract(mx * 2.2) * 2.0 - 1.0) * 2.0 - 1.0;
+            float line = max(smoothstep(0.2, 0.0, abs(abs(yb) - 1.0)), smoothstep(0.32, 0.0, abs(yb - zig)));
+            col = mix(col, vec3(0.06, 0.06, 0.09) + uA * 0.04 * step(0.0, yb), line);
+        }
+    }
+    vec3 pc;
+    if (pipe(p, -0.7, 0.035, mx, vec3(0.1, 0.09, 0.12), pc) > 0.0) col = pc;
+    if (pipe(p, -0.765, 0.022, mx + 0.4, uB * 0.35 + 0.05, pc) > 0.0) col = pc;
+    if (pipe(p, 0.76, 0.03, mx + 0.9, vec3(0.09, 0.09, 0.11), pc) > 0.0) col = pc;
+    // coolant flowing in the thin pipe
+    float flow = smoothstep(0.92, 1.0, fract(mx * 0.7 - uTime * 0.9));
+    col += uB * flow * step(abs(p.y + 0.765), 0.012) * 0.8;
+
+    // near: the deck and the ceiling, with hazard stripes along the edges
+    float sx = p.x + uScroll;
+    float below = uFloor - p.y;
+    float above = p.y - uCeil;
+    float edge = max(below, above);
+    if (edge > 0.0) {
+        float yy = below > 0.0 ? below : above;
+        vec2 cp = vec2(sx * 3.0, yy * 3.0);
+        vec2 cg = abs(fract(cp) - 0.5);
+        vec3 d = vec3(0.045, 0.045, 0.065) + vec3(0.02, 0.02, 0.03) * h21(floor(cp));
+        d *= 1.0 - smoothstep(0.45, 0.5, max(cg.x, cg.y)) * 0.55;
+        d *= 1.0 - smoothstep(0.0, 0.3, yy) * 0.45;
+        if (yy < 0.035) {
+            float st = step(0.5, fract((sx + yy) * 5.0));
+            d = mix(vec3(0.03), vec3(0.75, 0.55, 0.08), st) * 0.6;
+        }
+        d += uA * smoothstep(0.012, 0.0, abs(yy - 0.04)) * 0.6;
+        col = d;
+    }
+    float lip = min(abs(below), abs(above));
+    col += uA * exp(-lip * 40.0) * 0.12;
+
+    vec2 v = vUv - 0.5;
+    col *= 1.0 - dot(v, v) * 0.8;
+    col *= uDim;
+    col = mix(col, uFlashCol, uFlash * 0.3);
+    gl_FragColor = vec4(col, 1.0);
+}
+"""
+}
